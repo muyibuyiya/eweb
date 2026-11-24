@@ -55,6 +55,9 @@ const ALLOWED_IMAGE_HOST_PATTERNS = [
   /(^|\.)jmcomic/i,
   /(^|\.)cdn-msp/i,
   /(^|\.)jmapiproxy/i,
+  /(^|\.)cdnblackmyth\./i,
+  /(^|\.)cdnmhwscc\./i,
+  /(^|\.)cdnuc\./i,
 ];
 
 function isAllowedImageUrl(rawUrl: string, jmDomain?: string): boolean {
