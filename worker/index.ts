@@ -186,10 +186,39 @@ async function fetchEhHtml(url: string, ctx: WorkerContext): Promise<string> {
   if (!text.trim()) {
     throw new Error('上游站点返回了空白页面（可能是 Cookie 失效或 Cloudflare 节点 IP 被限流）。');
   }
-  if (text.includes('Your IP address has been temporarily banned')) {
-    throw new Error('当前 Cloudflare 出口 IP 已被 E-Hentai 临时限流，请稍后再试。');
+  if (
+    text.includes('Your IP address has been temporarily banned') ||
+    text.includes('temporarily banned')
+  ) {
+    throw new Error(
+      '当前 Cloudflare 公共出口 IP 已被 E-Hentai 临时限流。导入你的 E-Hentai 登录 Cookie 通常可缓解，或稍等片刻再试 / 改用本机 Node 服务。'
+    );
+  }
+  if (text.includes('You are opening pages too fast')) {
+    throw new Error('请求频率过快，请稍等几秒后刷新重试。');
   }
   return text;
+}
+
+function assertValidGalleryListHtml(html: string, parsedCount: number, site: EhSite): void {
+  if (parsedCount > 0) return;
+  if (
+    html.includes('No unfiltered results') ||
+    html.includes('No hits found') ||
+    html.includes('found 0 results')
+  ) {
+    return;
+  }
+  const plain = html
+    .replace(/<script[\s\S]*?<\/script>/gi, ' ')
+    .replace(/<style[\s\S]*?<\/style>/gi, ' ')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 180);
+  throw new Error(
+    `上游 ${site} 未返回画廊列表（可能是 Cloudflare 公共 IP 临时受限或需要登录 Cookie）。站点提示：${plain || '空页面'}`
+  );
 }
 
 interface EhTagDbRaw {
@@ -381,7 +410,9 @@ export default {
         if (prev) target.searchParams.set('prev', prev);
 
         const html = await fetchEhHtml(target.toString(), ctx);
-        return jsonResponse(request, parseGalleryListHtml(html, ctx.site));
+        const parsed = parseGalleryListHtml(html, ctx.site);
+        assertValidGalleryListHtml(html, parsed.items.length, ctx.site);
+        return jsonResponse(request, parsed);
       }
 
       const jmChapterMatch = pathname.match(/^\/api\/jm-chapter\/(\d+)$/);

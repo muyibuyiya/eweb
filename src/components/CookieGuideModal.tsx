@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import {
   Check,
   Copy,
@@ -23,6 +23,26 @@ interface CookieGuideModalProps {
 const EH_BOOKMARKLET =
   "javascript:(()=>{const c=document.cookie;if(!c){alert('未检测到 Cookie，请确认已登录');return;}prompt('请全选复制下方 Cookie 粘贴回 EhWeb：',c);})();";
 
+function extractCookieValue(cookieStr: string, key: string): string {
+  const regex = new RegExp(`(?:^|;\\s*)${key}=([^;]+)`, 'i');
+  const match = cookieStr.match(regex);
+  return match ? match[1].trim() : '';
+}
+
+function stripKeyPrefix(val: string, key: string): string {
+  const trimmed = val.trim();
+  const regex = new RegExp(`^${key}=`, 'i');
+  return trimmed.replace(regex, '').replace(/;+$/, '').trim();
+}
+
+function assembleEhCookie(memberId: string, passHash: string, igneous: string): string {
+  const parts: string[] = [];
+  if (memberId.trim()) parts.push(`ipb_member_id=${memberId.trim()}`);
+  if (passHash.trim()) parts.push(`ipb_pass_hash=${passHash.trim()}`);
+  if (igneous.trim()) parts.push(`igneous=${igneous.trim()}`);
+  return parts.join('; ');
+}
+
 export const CookieGuideModal: React.FC<CookieGuideModalProps> = ({
   open,
   initialSite,
@@ -39,7 +59,79 @@ export const CookieGuideModal: React.FC<CookieGuideModalProps> = ({
   const [ehLoginMsg, setEhLoginMsg] = useState<{ ok: boolean; text: string } | null>(null);
   const [copiedBookmarklet, setCopiedBookmarklet] = useState(false);
 
+  // Separate value-only fields for E-Hentai / ExHentai
+  const [memberId, setMemberId] = useState(() =>
+    extractCookieValue(settings.cookie, 'ipb_member_id')
+  );
+  const [passHash, setPassHash] = useState(() =>
+    extractCookieValue(settings.cookie, 'ipb_pass_hash')
+  );
+  const [igneous, setIgneous] = useState(() =>
+    extractCookieValue(settings.cookie, 'igneous')
+  );
+
+  // Value-only fields for Pixiv & JMComic
+  const [pixivSessId, setPixivSessId] = useState(() =>
+    extractCookieValue(settings.pixivCookie, 'PHPSESSID') ||
+    stripKeyPrefix(settings.pixivCookie, 'PHPSESSID')
+  );
+  const [jmAvs, setJmAvs] = useState(() =>
+    extractCookieValue(settings.jmCookie, 'AVS') || stripKeyPrefix(settings.jmCookie, 'AVS')
+  );
+
+  useEffect(() => {
+    if (!open) return;
+    setSiteTab(initialSite === 'pixiv' ? 'pixiv' : initialSite === 'jmcomic' ? 'jm' : 'eh');
+    setMemberId(extractCookieValue(settings.cookie, 'ipb_member_id'));
+    setPassHash(extractCookieValue(settings.cookie, 'ipb_pass_hash'));
+    setIgneous(extractCookieValue(settings.cookie, 'igneous'));
+    setPixivSessId(
+      extractCookieValue(settings.pixivCookie, 'PHPSESSID') ||
+        stripKeyPrefix(settings.pixivCookie, 'PHPSESSID')
+    );
+    setJmAvs(
+      extractCookieValue(settings.jmCookie, 'AVS') || stripKeyPrefix(settings.jmCookie, 'AVS')
+    );
+  }, [open, initialSite, settings.cookie, settings.pixivCookie, settings.jmCookie]);
+
   if (!open) return null;
+
+  const updateEhFields = (nextMember: string, nextHash: string, nextIgneous: string) => {
+    setMemberId(nextMember);
+    setPassHash(nextHash);
+    setIgneous(nextIgneous);
+    onUpdateSettings({ cookie: assembleEhCookie(nextMember, nextHash, nextIgneous) });
+  };
+
+  // If user pastes a full cookie string into any EH field, auto-split all 3 values!
+  const handleEhFieldChange = (field: 'member' | 'hash' | 'igneous', raw: string) => {
+    if (raw.includes('ipb_member_id=') && raw.includes('ipb_pass_hash=')) {
+      const m = extractCookieValue(raw, 'ipb_member_id');
+      const h = extractCookieValue(raw, 'ipb_pass_hash');
+      const ig = extractCookieValue(raw, 'igneous') || igneous;
+      updateEhFields(m, h, ig);
+      return;
+    }
+    if (field === 'member') {
+      updateEhFields(stripKeyPrefix(raw, 'ipb_member_id'), passHash, igneous);
+    } else if (field === 'hash') {
+      updateEhFields(memberId, stripKeyPrefix(raw, 'ipb_pass_hash'), igneous);
+    } else {
+      updateEhFields(memberId, passHash, stripKeyPrefix(raw, 'igneous'));
+    }
+  };
+
+  const handlePixivChange = (raw: string) => {
+    const val = extractCookieValue(raw, 'PHPSESSID') || stripKeyPrefix(raw, 'PHPSESSID');
+    setPixivSessId(val);
+    onUpdateSettings({ pixivCookie: val ? `PHPSESSID=${val}` : '' });
+  };
+
+  const handleJmAvsChange = (raw: string) => {
+    const val = extractCookieValue(raw, 'AVS') || stripKeyPrefix(raw, 'AVS');
+    setJmAvs(val);
+    onUpdateSettings({ jmCookie: val ? `AVS=${val}` : '' });
+  };
 
   const handleEhPasswordLogin = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -47,8 +139,10 @@ export const CookieGuideModal: React.FC<CookieGuideModalProps> = ({
     setEhLoginMsg(null);
     try {
       const res = await ehOfficialLogin(ehUsername, ehPassword, settings);
-      onUpdateSettings({ cookie: res.cookie });
-      setEhLoginMsg({ ok: true, text: '官方接口登录成功！已自动保存 Cookie。' });
+      const m = extractCookieValue(res.cookie, 'ipb_member_id');
+      const h = extractCookieValue(res.cookie, 'ipb_pass_hash');
+      updateEhFields(m, h, igneous);
+      setEhLoginMsg({ ok: true, text: '官方接口登录成功！已自动填入下方 Cookie。' });
       setEhPassword('');
     } catch (err) {
       setEhLoginMsg({
@@ -58,17 +152,6 @@ export const CookieGuideModal: React.FC<CookieGuideModalProps> = ({
     } finally {
       setEhLoginLoading(false);
     }
-  };
-
-  const smartExtractCookie = (raw: string, target: 'eh' | 'pixiv' | 'jm'): string => {
-    const trimmed = raw.trim();
-    if (target === 'pixiv') {
-      const m = trimmed.match(/PHPSESSID=([^;\s"']+)/i);
-      if (m) return `PHPSESSID=${m[1]}`;
-      // If user pasted only the value like 12345678_abcdef...
-      if (/^\d+_[A-Za-z0-9]+$/.test(trimmed)) return `PHPSESSID=${trimmed}`;
-    }
-    return trimmed;
   };
 
   const copyBookmarklet = () => {
@@ -88,7 +171,7 @@ export const CookieGuideModal: React.FC<CookieGuideModalProps> = ({
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-2">
             <KeyRound className="h-5 w-5" style={{ color: 'var(--accent)' }} />
-            <h2 className="text-[17px] font-bold">账号登录与 Cookie 导入教程</h2>
+            <h2 className="text-[17px] font-bold">账号登录与 Cookie 导入</h2>
           </div>
           <button
             type="button"
@@ -130,15 +213,101 @@ export const CookieGuideModal: React.FC<CookieGuideModalProps> = ({
         {/* E-Hentai / ExHentai Tab */}
         {siteTab === 'eh' && (
           <div className="mt-4 space-y-4">
-            {/* Method 1: Official Login API */}
+            {/* Method 1: Separate Value-Only Cookie Fields (Primary & Most Reliable) */}
+            <div
+              className="rounded-2xl border p-3.5 space-y-3"
+              style={{ borderColor: 'var(--border-subtle)', background: 'var(--bg-primary)' }}
+            >
+              <div className="flex items-center justify-between">
+                <span className="text-[13px] font-bold">Cookie 登录（直接粘贴对应值即可）</span>
+                <a
+                  href="https://forums.e-hentai.org/index.php?act=Login"
+                  target="_blank"
+                  rel="noreferrer"
+                  className="inline-flex items-center gap-1 text-[11px] font-semibold"
+                  style={{ color: 'var(--accent)' }}
+                >
+                  去官网登录 <ExternalLink className="h-3 w-3" />
+                </a>
+              </div>
+
+              <div className="space-y-2.5">
+                <div>
+                  <label className="mb-1 block text-[11px] font-semibold" style={{ color: 'var(--text-secondary)' }}>
+                    ipb_member_id <span className="text-rose-500">*</span>
+                  </label>
+                  <input
+                    type="text"
+                    value={memberId}
+                    onChange={(e) => handleEhFieldChange('member', e.target.value)}
+                    placeholder="只需粘贴值，例如 1234567"
+                    className="w-full rounded-xl border px-3 py-2 text-[13px] font-mono outline-none focus:ring-2 focus:ring-indigo-500/40"
+                    style={{ background: 'var(--bg-secondary)', borderColor: 'var(--border-subtle)' }}
+                  />
+                </div>
+
+                <div>
+                  <label className="mb-1 block text-[11px] font-semibold" style={{ color: 'var(--text-secondary)' }}>
+                    ipb_pass_hash <span className="text-rose-500">*</span>
+                  </label>
+                  <input
+                    type="text"
+                    value={passHash}
+                    onChange={(e) => handleEhFieldChange('hash', e.target.value)}
+                    placeholder="只需粘贴 32 位字符串"
+                    className="w-full rounded-xl border px-3 py-2 text-[13px] font-mono outline-none focus:ring-2 focus:ring-indigo-500/40"
+                    style={{ background: 'var(--bg-secondary)', borderColor: 'var(--border-subtle)' }}
+                  />
+                </div>
+
+                <div>
+                  <label className="mb-1 block text-[11px] font-semibold" style={{ color: 'var(--text-secondary)' }}>
+                    igneous <span className="opacity-70">（选填，仅访问里站 ExHentai 需要）</span>
+                  </label>
+                  <input
+                    type="text"
+                    value={igneous}
+                    onChange={(e) => handleEhFieldChange('igneous', e.target.value)}
+                    placeholder="只需粘贴值，不看里站可留空"
+                    className="w-full rounded-xl border px-3 py-2 text-[13px] font-mono outline-none focus:ring-2 focus:ring-indigo-500/40"
+                    style={{ background: 'var(--bg-secondary)', borderColor: 'var(--border-subtle)' }}
+                  />
+                </div>
+              </div>
+
+              <ol
+                className="list-decimal space-y-1 pl-4 text-[11.5px] leading-relaxed"
+                style={{ color: 'var(--text-secondary)' }}
+              >
+                <li>
+                  电脑浏览器登录 <code>e-hentai.org</code>，按 <b>F12</b> → <b>Application（应用）</b> →{' '}
+                  <b>Cookies</b>，双击复制上面对应行的 <b>Value（值）</b> 粘贴进来即可，无需手写前缀。
+                </li>
+                <li>
+                  也可以直接把整段 <code>document.cookie</code> 粘贴到任意框中，会自动拆分填入。
+                </li>
+              </ol>
+
+              <button
+                type="button"
+                onClick={copyBookmarklet}
+                className="inline-flex items-center gap-1.5 rounded-xl px-3 py-1.5 text-[12px] font-semibold"
+                style={{ background: 'var(--accent-soft)', color: 'var(--accent)' }}
+              >
+                {copiedBookmarklet ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
+                {copiedBookmarklet ? '已复制 Safari 书签脚本' : '复制 Safari 一键提取 Cookie 书签脚本'}
+              </button>
+            </div>
+
+            {/* Method 2: Official Login API */}
             <form
               onSubmit={handleEhPasswordLogin}
               className="rounded-2xl border p-3.5 space-y-2.5"
               style={{ borderColor: 'var(--border-subtle)', background: 'var(--bg-primary)' }}
             >
               <div className="flex items-center justify-between">
-                <span className="text-[13px] font-bold">方式一：调用官网账号密码接口登录</span>
-                <span className="text-[10px] opacity-60">无验证码时一步搞定</span>
+                <span className="text-[13px] font-bold">备选：账号密码直连官网接口</span>
+                <span className="text-[10px] opacity-60">无验证码时可自动填充</span>
               </div>
               <input
                 type="text"
@@ -179,56 +348,6 @@ export const CookieGuideModal: React.FC<CookieGuideModalProps> = ({
                 </p>
               )}
             </form>
-
-            {/* Method 2: Cookie Import */}
-            <div
-              className="rounded-2xl border p-3.5 space-y-2.5"
-              style={{ borderColor: 'var(--border-subtle)', background: 'var(--bg-primary)' }}
-            >
-              <div className="flex items-center justify-between">
-                <span className="text-[13px] font-bold">方式二：导入 Cookie（支持里站 ExHentai）</span>
-                <a
-                  href="https://forums.e-hentai.org/index.php?act=Login"
-                  target="_blank"
-                  rel="noreferrer"
-                  className="inline-flex items-center gap-1 text-[11px] font-semibold"
-                  style={{ color: 'var(--accent)' }}
-                >
-                  去官网登录 <ExternalLink className="h-3 w-3" />
-                </a>
-              </div>
-              <textarea
-                rows={2}
-                value={settings.cookie}
-                onChange={(e) => onUpdateSettings({ cookie: e.target.value.trim() })}
-                placeholder="ipb_member_id=...; ipb_pass_hash=...; igneous=..."
-                className="w-full rounded-xl border px-3 py-2 text-[12px] font-mono outline-none"
-                style={{ background: 'var(--bg-secondary)', borderColor: 'var(--border-subtle)' }}
-              />
-              <ol
-                className="list-decimal space-y-1 pl-4 text-[12px] leading-relaxed"
-                style={{ color: 'var(--text-secondary)' }}
-              >
-                <li>
-                  <b>电脑浏览器（最简单）</b>：登录 <code>e-hentai.org</code>（里站再打开{' '}
-                  <code>exhentai.org</code>），按 <b>F12</b> → <b>Application（应用）</b> →{' '}
-                  <b>Cookies</b>，复制 <code>ipb_member_id</code>、<code>ipb_pass_hash</code>
-                  （里站加 <code>igneous</code>）。
-                </li>
-                <li>
-                  <b>iPhone Safari 书签小工具</b>：复制下方脚本，在 Safari 随便收藏一个网页并把网址改成它；登录 E-Hentai 后点一下该书签即可弹出 Cookie 复制回来：
-                </li>
-              </ol>
-              <button
-                type="button"
-                onClick={copyBookmarklet}
-                className="inline-flex items-center gap-1.5 rounded-xl px-3 py-1.5 text-[12px] font-semibold"
-                style={{ background: 'var(--accent-soft)', color: 'var(--accent)' }}
-              >
-                {copiedBookmarklet ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
-                {copiedBookmarklet ? '已复制 Safari 书签脚本' : '复制 Safari 一键提取 Cookie 书签脚本'}
-              </button>
-            </div>
           </div>
         )}
 
@@ -240,7 +359,7 @@ export const CookieGuideModal: React.FC<CookieGuideModalProps> = ({
               style={{ borderColor: 'var(--border-subtle)', background: 'var(--bg-primary)' }}
             >
               <div className="flex items-center justify-between">
-                <span className="text-[13px] font-bold">Pixiv PHPSESSID Cookie</span>
+                <span className="text-[13px] font-bold">Pixiv 登录凭证</span>
                 <a
                   href="https://www.pixiv.net/"
                   target="_blank"
@@ -250,36 +369,29 @@ export const CookieGuideModal: React.FC<CookieGuideModalProps> = ({
                   打开 Pixiv 官网 <ExternalLink className="h-3 w-3" />
                 </a>
               </div>
-              <textarea
-                rows={2}
-                value={settings.pixivCookie}
-                onChange={(e) =>
-                  onUpdateSettings({
-                    pixivCookie: smartExtractCookie(e.target.value, 'pixiv'),
-                  })
-                }
-                placeholder="粘贴 PHPSESSID=12345678_xxxxx 或直接粘贴其值（自动识别）"
-                className="w-full rounded-xl border px-3 py-2 text-[12px] font-mono outline-none"
-                style={{ background: 'var(--bg-secondary)', borderColor: 'var(--border-subtle)' }}
-              />
+              <div>
+                <label className="mb-1 block text-[11px] font-semibold" style={{ color: 'var(--text-secondary)' }}>
+                  PHPSESSID（只需粘贴值，无需前缀）
+                </label>
+                <input
+                  type="text"
+                  value={pixivSessId}
+                  onChange={(e) => handlePixivChange(e.target.value)}
+                  placeholder="例如 12345678_xxxxxxxxxxxxxxxx"
+                  className="w-full rounded-xl border px-3 py-2 text-[13px] font-mono outline-none focus:ring-2 focus:ring-sky-500/40"
+                  style={{ background: 'var(--bg-secondary)', borderColor: 'var(--border-subtle)' }}
+                />
+              </div>
               <div
                 className="flex items-start gap-2 rounded-xl p-2.5 text-[11.5px] leading-relaxed"
                 style={{ background: 'var(--bg-chip)', color: 'var(--text-secondary)' }}
               >
                 <ShieldAlert className="mt-0.5 h-4 w-4 shrink-0 text-amber-500" />
                 <span>
-                  由于 Pixiv 登录强制使用 Google reCAPTCHA 且 <code>PHPSESSID</code> 为 HttpOnly
-                  保护（浏览器不允许网页脚本自动读取），需从浏览器 F12 面板复制一次即可长期生效（支持同步官方收藏、关注画师和 R-18）。
+                  电脑浏览器登录 <code>www.pixiv.net</code> → 按 <b>F12</b> → <b>Application</b> →{' '}
+                  <b>Cookies</b> → 找到 <code>PHPSESSID</code> 复制它的 <b>Value</b> 粘贴到上方即可。
                 </span>
               </div>
-              <ol
-                className="list-decimal space-y-1 pl-4 text-[12px] leading-relaxed"
-                style={{ color: 'var(--text-secondary)' }}
-              >
-                <li>在电脑 Chrome / Edge / Safari 登录 <code>www.pixiv.net</code>。</li>
-                <li>按 <b>F12</b> 打开开发者工具 → <b>Application（应用）</b> → <b>Cookies</b> → <code>https://www.pixiv.net</code>。</li>
-                <li>找到名称为 <code>PHPSESSID</code> 的一行，复制它的 <b>Value（值）</b> 粘贴到上方输入框即可。</li>
-              </ol>
             </div>
           </div>
         )}
@@ -292,9 +404,6 @@ export const CookieGuideModal: React.FC<CookieGuideModalProps> = ({
               style={{ borderColor: 'var(--border-subtle)', background: 'var(--bg-primary)' }}
             >
               <div className="text-[13px] font-bold">禁漫天堂镜像域名</div>
-              <p className="text-[12px]" style={{ color: 'var(--text-secondary)' }}>
-                若默认域名被拦截或触发验证，可随时切换可用镜像站（例如 <code>https://18comic.vip</code>、<code>https://18comic.org</code>）。
-              </p>
               <input
                 type="url"
                 value={settings.jmDomain}
@@ -304,15 +413,19 @@ export const CookieGuideModal: React.FC<CookieGuideModalProps> = ({
                 style={{ background: 'var(--bg-secondary)', borderColor: 'var(--border-subtle)' }}
               />
 
-              <div className="pt-2 text-[13px] font-bold">禁漫 Cookie（可选，用于云端收藏）</div>
-              <textarea
-                rows={2}
-                value={settings.jmCookie}
-                onChange={(e) => onUpdateSettings({ jmCookie: e.target.value.trim() })}
-                placeholder="AVS=..."
-                className="w-full rounded-xl border px-3 py-2 text-[12px] font-mono outline-none"
-                style={{ background: 'var(--bg-secondary)', borderColor: 'var(--border-subtle)' }}
-              />
+              <div className="pt-1">
+                <label className="mb-1 block text-[11px] font-semibold" style={{ color: 'var(--text-secondary)' }}>
+                  AVS Cookie（选填，只需粘贴值）
+                </label>
+                <input
+                  type="text"
+                  value={jmAvs}
+                  onChange={(e) => handleJmAvsChange(e.target.value)}
+                  placeholder="留空可免登录浏览"
+                  className="w-full rounded-xl border px-3 py-2 text-[13px] font-mono outline-none"
+                  style={{ background: 'var(--bg-secondary)', borderColor: 'var(--border-subtle)' }}
+                />
+              </div>
             </div>
           </div>
         )}
