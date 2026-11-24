@@ -1,0 +1,104 @@
+@import "tailwindcss";
+
+:root {
+  --bg-primary: #f2f2f7;
+  --bg-secondary: #ffffff;
+  --bg-elevated: rgba(255, 255, 255, 0.82);
+  --bg-chip: rgba(118, 118, 128, 0.12);
+  --text-primary: #111114;
+  --text-secondary: #636366;
+  --border-subtle: rgba(60, 60, 67, 0.12);
+  --accent: #5856d6;
+  --accent-soft: rgba(88, 86, 214, 0.14);
+}
+
+[data-theme="dark"] {
+  --bg-primary: #0f1117;
+  --bg-secondary: #1a1d26;
+  --bg-elevated: rgba(24, 27, 36, 0.82);
+  --bg-chip: rgba(142, 142, 147, 0.18);
+  --text-primary: #f5f5f7;
+  --text-secondary: #9ca3af;
+  --border-subtle: rgba(255, 255, 255, 0.1);
+  --accent: #7c7aff;
+  --accent-soft: rgba(124, 122, 255, 0.18);
+}
+
+[data-theme="oled"] {
+  --bg-primary: #000000;
+  --bg-secondary: #121214;
+  --bg-elevated: rgba(12, 12, 14, 0.86);
+  --bg-chip: rgba(142, 142, 147, 0.18);
+  --text-primary: #ffffff;
+  --text-secondary: #8e8e93;
+  --border-subtle: rgba(255, 255, 255, 0.12);
+  --accent: #818cf8;
+  --accent-soft: rgba(129, 140, 248, 0.2);
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+  background-color: var(--bg-primary);
+  color: var(--text-primary);
+  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "SF Pro Display", "PingFang SC",
+    "Helvetica Neue", sans-serif;
+  -webkit-tap-highlight-color: transparent;
+  -webkit-touch-callout: none;
+  overscroll-behavior-y: none;
+}
+
+.ios-glass {
+  background: var(--bg-elevated);
+  backdrop-filter: blur(22px) saturate(180%);
+  -webkit-backdrop-filter: blur(22px) saturate(180%);
+}
+
+.ios-card {
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-subtle);
+}
+
+.safe-pt {
+  padding-top: env(safe-area-inset-top, 0px);
+}
+
+.safe-pb {
+  padding-bottom: env(safe-area-inset-bottom, 0px);
+}
+
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+.no-scrollbar {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+
+.reader-img-saveable {
+  -webkit-touch-callout: default;
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+/* Custom iOS-like range slider for reader scrubber */
+input[type="range"].ios-slider {
+  -webkit-appearance: none;
+  appearance: none;
+  height: 4px;
+  border-radius: 9999px;
+  background: rgba(255, 255, 255, 0.28);
+  outline: none;
+}
+
+input[type="range"].ios-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: #ffffff;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.35);
+  cursor: pointer;
+}

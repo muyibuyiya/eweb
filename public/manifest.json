@@ -1,0 +1,18 @@
+{
+  "name": "EhWeb — Modern iOS Reader",
+  "short_name": "EhWeb",
+  "description": "现代化、专为 iOS 打造的 E-Hentai / ExHentai 网页阅读器",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#0f1117",
+  "theme_color": "#5856d6",
+  "orientation": "portrait-primary",
+  "icons": [
+    {
+      "src": "/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}
