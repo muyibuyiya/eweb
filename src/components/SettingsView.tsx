@@ -206,26 +206,140 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
           </div>
         </div>
 
-        <div className="p-4">
-          <div className="flex items-center gap-2 text-[14px] font-bold">
-            <KeyRound className="h-4 w-4" style={{ color: 'var(--accent)' }} />
-            Cookie 配置（访问里站 / 云端收藏）
+        <div className="p-4 space-y-2.5">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2 text-[14px] font-bold">
+              <KeyRound className="h-4 w-4" style={{ color: 'var(--accent)' }} />
+              Cookie 配置（只需粘贴值，无需前缀）
+            </div>
           </div>
-          <p className="mt-1 text-[12px]" style={{ color: 'var(--text-secondary)' }}>
-            格式：<code>ipb_member_id=xxx; ipb_pass_hash=xxx; igneous=xxx</code>
-            （仅保存在本机浏览器与你的自托管服务内存中）
-          </p>
-          <textarea
-            rows={2}
-            value={settings.cookie}
-            onChange={(e) => onUpdate({ cookie: e.target.value })}
-            placeholder="ipb_member_id=...; ipb_pass_hash=...; igneous=..."
-            className="mt-2.5 w-full rounded-xl border px-3 py-2 text-[13px] outline-none focus:ring-2 focus:ring-indigo-500/40"
-            style={{
-              background: 'var(--bg-primary)',
-              borderColor: 'var(--border-subtle)',
-            }}
-          />
+
+          {settings.site === 'pixiv' ? (
+            <div>
+              <label className="mb-1 block text-[11px] font-semibold" style={{ color: 'var(--text-secondary)' }}>
+                Pixiv PHPSESSID
+              </label>
+              <input
+                type="text"
+                value={
+                  settings.pixivCookie.match(/(?:^|;\s*)PHPSESSID=([^;]+)/i)?.[1] ||
+                  settings.pixivCookie.replace(/^PHPSESSID=/i, '')
+                }
+                onChange={(e) => {
+                  const val = e.target.value.trim().replace(/^PHPSESSID=/i, '').replace(/;+$/, '');
+                  onUpdate({ pixivCookie: val ? `PHPSESSID=${val}` : '' });
+                }}
+                placeholder="只需粘贴值，例如 12345678_xxxxxxxx"
+                className="w-full rounded-xl border px-3 py-2 text-[13px] font-mono outline-none focus:ring-2 focus:ring-indigo-500/40"
+                style={{ background: 'var(--bg-primary)', borderColor: 'var(--border-subtle)' }}
+              />
+            </div>
+          ) : settings.site === 'jmcomic' ? (
+            <div className="space-y-2.5">
+              <div>
+                <label className="mb-1 block text-[11px] font-semibold" style={{ color: 'var(--text-secondary)' }}>
+                  禁漫镜像域名
+                </label>
+                <input
+                  type="url"
+                  value={settings.jmDomain}
+                  onChange={(e) => onUpdate({ jmDomain: e.target.value })}
+                  placeholder="https://18comic.vip"
+                  className="w-full rounded-xl border px-3 py-2 text-[13px] outline-none focus:ring-2 focus:ring-indigo-500/40"
+                  style={{ background: 'var(--bg-primary)', borderColor: 'var(--border-subtle)' }}
+                />
+              </div>
+              <div>
+                <label className="mb-1 block text-[11px] font-semibold" style={{ color: 'var(--text-secondary)' }}>
+                  AVS（选填）
+                </label>
+                <input
+                  type="text"
+                  value={
+                    settings.jmCookie.match(/(?:^|;\s*)AVS=([^;]+)/i)?.[1] ||
+                    settings.jmCookie.replace(/^AVS=/i, '')
+                  }
+                  onChange={(e) => {
+                    const val = e.target.value.trim().replace(/^AVS=/i, '').replace(/;+$/, '');
+                    onUpdate({ jmCookie: val ? `AVS=${val}` : '' });
+                  }}
+                  placeholder="只需粘贴值，留空可免登录浏览"
+                  className="w-full rounded-xl border px-3 py-2 text-[13px] font-mono outline-none focus:ring-2 focus:ring-indigo-500/40"
+                  style={{ background: 'var(--bg-primary)', borderColor: 'var(--border-subtle)' }}
+                />
+              </div>
+            </div>
+          ) : (
+            (() => {
+              const memberId = settings.cookie.match(/(?:^|;\s*)ipb_member_id=([^;]+)/i)?.[1] || '';
+              const passHash = settings.cookie.match(/(?:^|;\s*)ipb_pass_hash=([^;]+)/i)?.[1] || '';
+              const igneous = settings.cookie.match(/(?:^|;\s*)igneous=([^;]+)/i)?.[1] || '';
+              const saveEh = (m: string, h: string, ig: string) => {
+                const parts: string[] = [];
+                if (m.trim()) parts.push(`ipb_member_id=${m.trim()}`);
+                if (h.trim()) parts.push(`ipb_pass_hash=${h.trim()}`);
+                if (ig.trim()) parts.push(`igneous=${ig.trim()}`);
+                onUpdate({ cookie: parts.join('; ') });
+              };
+              const onField = (field: 'm' | 'h' | 'ig', raw: string) => {
+                if (raw.includes('ipb_member_id=') && raw.includes('ipb_pass_hash=')) {
+                  saveEh(
+                    raw.match(/(?:^|;\s*)ipb_member_id=([^;]+)/i)?.[1] || '',
+                    raw.match(/(?:^|;\s*)ipb_pass_hash=([^;]+)/i)?.[1] || '',
+                    raw.match(/(?:^|;\s*)igneous=([^;]+)/i)?.[1] || igneous
+                  );
+                  return;
+                }
+                const clean = raw.trim().replace(/^(ipb_member_id|ipb_pass_hash|igneous)=/i, '').replace(/;+$/, '');
+                if (field === 'm') saveEh(clean, passHash, igneous);
+                else if (field === 'h') saveEh(memberId, clean, igneous);
+                else saveEh(memberId, passHash, clean);
+              };
+              return (
+                <div className="space-y-2">
+                  <div>
+                    <label className="mb-1 block text-[11px] font-semibold" style={{ color: 'var(--text-secondary)' }}>
+                      ipb_member_id
+                    </label>
+                    <input
+                      type="text"
+                      value={memberId}
+                      onChange={(e) => onField('m', e.target.value)}
+                      placeholder="只需粘贴值，例如 1234567"
+                      className="w-full rounded-xl border px-3 py-2 text-[13px] font-mono outline-none focus:ring-2 focus:ring-indigo-500/40"
+                      style={{ background: 'var(--bg-primary)', borderColor: 'var(--border-subtle)' }}
+                    />
+                  </div>
+                  <div>
+                    <label className="mb-1 block text-[11px] font-semibold" style={{ color: 'var(--text-secondary)' }}>
+                      ipb_pass_hash
+                    </label>
+                    <input
+                      type="text"
+                      value={passHash}
+                      onChange={(e) => onField('h', e.target.value)}
+                      placeholder="只需粘贴 32 位字符串"
+                      className="w-full rounded-xl border px-3 py-2 text-[13px] font-mono outline-none focus:ring-2 focus:ring-indigo-500/40"
+                      style={{ background: 'var(--bg-primary)', borderColor: 'var(--border-subtle)' }}
+                    />
+                  </div>
+                  <div>
+                    <label className="mb-1 block text-[11px] font-semibold" style={{ color: 'var(--text-secondary)' }}>
+                      igneous（选填，仅访问里站 ExHentai 需要）
+                    </label>
+                    <input
+                      type="text"
+                      value={igneous}
+                      onChange={(e) => onField('ig', e.target.value)}
+                      placeholder="不看里站可留空"
+                      className="w-full rounded-xl border px-3 py-2 text-[13px] font-mono outline-none focus:ring-2 focus:ring-indigo-500/40"
+                      style={{ background: 'var(--bg-primary)', borderColor: 'var(--border-subtle)' }}
+                    />
+                  </div>
+                </div>
+              );
+            })()
+          )}
         </div>
 
         <div className="p-4">
