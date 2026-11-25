@@ -304,9 +304,12 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
     [detail.gid, ensurePageToken, settings, totalPages]
   );
 
-  // Load current page + preload next N pages
+  // Load current page + preload next N pages + previous 1 page
   useEffect(() => {
     loadPage(currentPage);
+    if (currentPage > 1) {
+      loadPage(currentPage - 1);
+    }
     for (let i = 1; i <= settings.preloadCount; i++) {
       if (currentPage + i <= totalPages) {
         loadPage(currentPage + i);
@@ -497,6 +500,7 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
                       src={buildImageUrl(data.imageUrl)}
                       alt={`Page ${pNum}`}
                       loading="lazy"
+                      decoding="async"
                       onTouchStart={(e) => {
                         if (e.touches.length === 1) {
                           startLongPress(pNum, e.touches[0].clientX, e.touches[0].clientY);
@@ -571,6 +575,8 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
               key={`${currentPage}-${currentData.imageUrl}`}
               src={buildImageUrl(currentData.imageUrl)}
               alt={`Page ${currentPage}`}
+              decoding="async"
+              fetchPriority="high"
               className="reader-img-saveable max-h-full max-w-full object-contain"
             />
           ) : currentError ? (

@@ -1,4 +1,4 @@
-import { fetch as undiciFetch, ProxyAgent, type Dispatcher } from 'undici';
+import { Agent, fetch as undiciFetch, ProxyAgent, type Dispatcher } from 'undici';
 import type { EhSite } from '../shared/types.js';
 
 export interface RequestContext {
@@ -8,8 +8,13 @@ export interface RequestContext {
 }
 
 const proxyAgentCache = new Map<string, ProxyAgent>();
+const directAgent = new Agent({
+  keepAliveTimeout: 30000,
+  keepAliveMaxTimeout: 60000,
+  connections: 32,
+});
 
-function getDispatcher(proxyUrl?: string): Dispatcher | undefined {
+function getDispatcher(proxyUrl?: string): Dispatcher {
   const effectiveProxy =
     proxyUrl?.trim() ||
     process.env.HTTPS_PROXY ||
@@ -17,14 +22,28 @@ function getDispatcher(proxyUrl?: string): Dispatcher | undefined {
     process.env.https_proxy ||
     process.env.http_proxy;
 
-  if (!effectiveProxy) return undefined;
+  if (!effectiveProxy) return directAgent;
 
   let agent = proxyAgentCache.get(effectiveProxy);
   if (!agent) {
-    agent = new ProxyAgent(effectiveProxy);
+    agent = new ProxyAgent({
+      uri: effectiveProxy,
+      connections: 32,
+      keepAliveTimeout: 30000,
+    });
     proxyAgentCache.set(effectiveProxy, agent);
   }
   return agent;
+}
+
+export function createProxyFetch(proxyUrl?: string): typeof fetch {
+  const dispatcher = getDispatcher(proxyUrl);
+  if (!dispatcher) return fetch;
+  return ((input: RequestInfo | URL, init?: RequestInit) =>
+    undiciFetch(input as never, {
+      ...((init as Record<string, unknown>) || {}),
+      dispatcher,
+    } as never) as unknown as Promise<Response>) as typeof fetch;
 }
 
 export function getSiteBaseUrl(site: EhSite): string {

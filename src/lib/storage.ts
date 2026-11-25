@@ -20,7 +20,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   theme: 'system',
   readingMode: 'vertical',
   viewLayout: 'grid',
-  preloadCount: 3,
+  preloadCount: 5,
 };
 
 function readJson<T>(key: string, fallback: T): T {

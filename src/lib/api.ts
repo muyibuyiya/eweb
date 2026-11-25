@@ -9,6 +9,9 @@ import type {
 
 let currentSid: string | null = null;
 let currentApiBase = '';
+let lastSyncedSessionKey = '';
+
+const clientDetailCache = new Map<string, { data: GalleryDetail; expiresAt: number }>();
 
 function apiUrl(path: string, settings?: AppSettings): string {
   const base = (settings?.apiBaseUrl ?? currentApiBase).trim().replace(/\/+$/, '');
@@ -18,6 +21,12 @@ function apiUrl(path: string, settings?: AppSettings): string {
 export async function syncSession(settings: AppSettings): Promise<string | null> {
   currentApiBase = settings.apiBaseUrl.trim().replace(/\/+$/, '');
   if (settings.demoMode) return null;
+
+  const sessionKey = `${currentApiBase}|${settings.site}|${settings.cookie}|${settings.pixivCookie}|${settings.jmCookie}|${settings.jmDomain}|${settings.proxyUrl}`;
+  if (currentSid && sessionKey === lastSyncedSessionKey) {
+    return currentSid;
+  }
+
   try {
     const res = await fetch(apiUrl('/api/session', settings), {
       method: 'POST',
@@ -35,6 +44,7 @@ export async function syncSession(settings: AppSettings): Promise<string | null>
     if (!res.ok) return null;
     const data = (await res.json()) as { sid: string };
     currentSid = data.sid;
+    lastSyncedSessionKey = sessionKey;
     return currentSid;
   } catch {
     return null;
@@ -115,13 +125,22 @@ export async function fetchGalleryDetail(
   settings: AppSettings,
   siteOverride?: EhSite
 ): Promise<GalleryDetail> {
+  const effectiveSite = siteOverride || settings.site;
+  const cacheKey = `${effectiveSite}|${gid}|${token}|${previewPage}|${settings.demoMode}`;
+  const cached = clientDetailCache.get(cacheKey);
+  if (cached && Date.now() < cached.expiresAt) {
+    return cached.data;
+  }
+
   const sp = new URLSearchParams();
   if (previewPage > 0) sp.set('p', String(previewPage));
   if (settings.demoMode) sp.set('demo', '1');
   const qs = sp.toString() ? `?${sp.toString()}` : '';
-  return requestJson<GalleryDetail>(`/api/gallery/${gid}/${token}${qs}`, settings, {
+  const data = await requestJson<GalleryDetail>(`/api/gallery/${gid}/${token}${qs}`, settings, {
     siteOverride,
   });
+  clientDetailCache.set(cacheKey, { data, expiresAt: Date.now() + 5 * 60_000 });
+  return data;
 }
 
 export async function fetchJmChapter(

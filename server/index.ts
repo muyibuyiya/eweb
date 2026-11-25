@@ -8,6 +8,7 @@ import fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import type { EhSite } from '../shared/types.js';
 import {
+  createProxyFetch,
   ehFetchBinary,
   ehFetchHtml,
   ehFetchJson,
@@ -38,16 +39,42 @@ import {
   jmFetchList,
 } from './providers/jmcomic.js';
 import { ehAddFavorite } from './providers/ehFavorite.js';
+import { LruCache } from './cache.js';
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
+const currentDir =
+  typeof __dirname !== 'undefined'
+    ? __dirname
+    : path.dirname(fileURLToPath(import.meta.url));
+
+// Auto-load .env if present (Node 20.12+ / 22+ / 24+)
+try {
+  const envPath = path.resolve(process.cwd(), '.env');
+  if (fs.existsSync(envPath) && typeof process.loadEnvFile === 'function') {
+    process.loadEnvFile(envPath);
+  }
+} catch {
+  // ignore .env parse errors
+}
 
 const app = express();
 const PORT = parseInt(process.env.PORT || '3000', 10);
 
 app.use(cors());
-app.use(compression());
+// Skip gzip compression for already-compressed image proxy responses
+app.use(
+  compression({
+    filter: (req, res) => {
+      if (req.path === '/api/proxy-image') return false;
+      return compression.filter(req, res);
+    },
+  })
+);
 app.use(express.json({ limit: '256kb' }));
+
+// In-memory LRU caches for fast repeat browsing & reading
+const apiCache = new LruCache<unknown>(16 * 1024 * 1024, 300);
+const imageCache = new LruCache<{ buffer: Buffer; contentType: string }>(120 * 1024 * 1024, 400);
+const inFlightImages = new Map<string, Promise<{ buffer: Buffer; contentType: string }>>();
 
 // In-memory session store so <img> proxy requests don't need raw cookies in URLs
 interface SessionConfig {
@@ -231,11 +258,19 @@ app.post('/api/favorite', async (req, res) => {
       return;
     }
     if (targetSite === 'pixiv') {
-      res.json(await pixivAddBookmark(String(gid), ctx.pixivCookie));
+      res.json(await pixivAddBookmark(String(gid), ctx.pixivCookie, createProxyFetch(ctx.proxyUrl)));
       return;
     }
     if (targetSite === 'e-hentai' || targetSite === 'exhentai') {
-      res.json(await ehAddFavorite(targetSite, String(gid), String(token || ''), ctx.cookie));
+      res.json(
+        await ehAddFavorite(
+          targetSite,
+          String(gid),
+          String(token || ''),
+          ctx.cookie,
+          createProxyFetch(ctx.proxyUrl)
+        )
+      );
       return;
     }
     res.status(400).json({ error: '该站点暂仅支持本地书架收藏' });
@@ -247,7 +282,12 @@ app.post('/api/favorite', async (req, res) => {
 app.get('/api/jm-chapter/:photoId', async (req, res) => {
   try {
     const ctx = getRequestContext(req);
-    const previews = await jmFetchChapterPreviews(ctx.jmDomain, req.params.photoId, ctx.jmCookie);
+    const previews = await jmFetchChapterPreviews(
+      ctx.jmDomain,
+      req.params.photoId,
+      ctx.jmCookie,
+      createProxyFetch(ctx.proxyUrl)
+    );
     res.json({ photoId: req.params.photoId, previews });
   } catch (err) {
     handleError(res, err);
@@ -283,12 +323,25 @@ app.get('/api/galleries', async (req, res) => {
     }
 
     const ctx = getRequestContext(req);
+    const listCacheKey = `list|${ctx.site}|${tab}|${q}|${fCats ?? ''}|${next ?? ''}|${prev ?? ''}|${Boolean(ctx.cookie || ctx.pixivCookie || ctx.jmCookie)}`;
+    const cachedList = apiCache.get(listCacheKey);
+    if (cachedList) {
+      res.setHeader('X-Cache', 'HIT');
+      res.json(cachedList);
+      return;
+    }
+
+    const pFetch = createProxyFetch(ctx.proxyUrl);
     if (ctx.site === 'pixiv') {
-      res.json(await pixivFetchList(tab, q, next, ctx.pixivCookie));
+      const data = await pixivFetchList(tab, q, next, ctx.pixivCookie, pFetch);
+      apiCache.set(listCacheKey, data, 60_000, 16_384);
+      res.json(data);
       return;
     }
     if (ctx.site === 'jmcomic') {
-      res.json(await jmFetchList(ctx.jmDomain, tab, q, next, ctx.jmCookie));
+      const data = await jmFetchList(ctx.jmDomain, tab, q, next, ctx.jmCookie, pFetch);
+      apiCache.set(listCacheKey, data, 60_000, 16_384);
+      res.json(data);
       return;
     }
 
@@ -311,6 +364,7 @@ app.get('/api/galleries', async (req, res) => {
 
     const html = await ehFetchHtml(url.toString(), ctx);
     const parsed = parseGalleryListHtml(html, ctx.site);
+    apiCache.set(listCacheKey, parsed, 60_000, 16_384);
     res.json(parsed);
   } catch (err) {
     handleError(res, err);
@@ -335,12 +389,25 @@ app.get('/api/gallery/:gid/:token', async (req, res) => {
     }
 
     const ctx = getRequestContext(req);
+    const detailCacheKey = `detail|${ctx.site}|${gid}|${token}|${pageIndex}`;
+    const cachedDetail = apiCache.get(detailCacheKey);
+    if (cachedDetail) {
+      res.setHeader('X-Cache', 'HIT');
+      res.json(cachedDetail);
+      return;
+    }
+
+    const pFetch = createProxyFetch(ctx.proxyUrl);
     if (token === 'pixiv' || ctx.site === 'pixiv') {
-      res.json(await pixivFetchDetail(gid, ctx.pixivCookie));
+      const data = await pixivFetchDetail(gid, ctx.pixivCookie, pFetch);
+      apiCache.set(detailCacheKey, data, 5 * 60_000, 32_768);
+      res.json(data);
       return;
     }
     if (token === 'jm' || ctx.site === 'jmcomic') {
-      res.json(await jmFetchDetail(ctx.jmDomain, gid, ctx.jmCookie));
+      const data = await jmFetchDetail(ctx.jmDomain, gid, ctx.jmCookie, pFetch);
+      apiCache.set(detailCacheKey, data, 5 * 60_000, 32_768);
+      res.json(data);
       return;
     }
 
@@ -350,6 +417,7 @@ app.get('/api/gallery/:gid/:token', async (req, res) => {
 
     const html = await ehFetchHtml(url.toString(), ctx);
     const detail = parseGalleryDetailHtml(html, gid, token, pageIndex, ctx.site);
+    apiCache.set(detailCacheKey, detail, 5 * 60_000, 32_768);
     res.json(detail);
   } catch (err) {
     handleError(res, err);
@@ -370,6 +438,16 @@ app.get('/api/image-page/:gid/:pageToken/:page', async (req, res) => {
     }
 
     const ctx = getRequestContext(req);
+    const pageCacheKey = `page|${ctx.site}|${gid}|${pageToken}|${page}`;
+    if (!nl) {
+      const cachedPage = apiCache.get(pageCacheKey);
+      if (cachedPage) {
+        res.setHeader('X-Cache', 'HIT');
+        res.json(cachedPage);
+        return;
+      }
+    }
+
     const base = getSiteBaseUrl(ctx.site);
     const url = new URL(`/s/${pageToken}/${gid}-${page}`, base);
     if (nl) url.searchParams.set('nl', nl);
@@ -379,6 +457,7 @@ app.get('/api/image-page/:gid/:pageToken/:page', async (req, res) => {
     if (!data.imageUrl) {
       throw new EhFetchError('未能解析到原图地址，请尝试重新加载。', 502, 'IMAGE_PARSE_FAILED');
     }
+    apiCache.set(pageCacheKey, data, 10 * 60_000, 4096);
     res.json(data);
   } catch (err) {
     handleError(res, err);
@@ -449,7 +528,7 @@ app.get('/api/tag-db', async (req, res) => {
   }
 });
 
-// Image proxy with host allowlist
+// Image proxy with host allowlist + LRU cache & request deduplication
 app.get('/api/proxy-image', async (req, res) => {
   try {
     const targetUrl = typeof req.query.url === 'string' ? req.query.url : '';
@@ -458,8 +537,27 @@ app.get('/api/proxy-image', async (req, res) => {
       return;
     }
 
+    const cached = imageCache.get(targetUrl);
+    if (cached) {
+      res.setHeader('Content-Type', cached.contentType);
+      res.setHeader('Cache-Control', 'public, max-age=604800, immutable');
+      res.setHeader('X-Cache', 'HIT');
+      res.send(cached.buffer);
+      return;
+    }
+
     const ctx = getRequestContext(req);
-    const { buffer, contentType } = await ehFetchBinary(targetUrl, ctx);
+    let pending = inFlightImages.get(targetUrl);
+    if (!pending) {
+      pending = ehFetchBinary(targetUrl, ctx).finally(() => {
+        inFlightImages.delete(targetUrl);
+      });
+      inFlightImages.set(targetUrl, pending);
+    }
+
+    const { buffer, contentType } = await pending;
+    imageCache.set(targetUrl, { buffer, contentType }, 30 * 60_000, buffer.byteLength);
+
     res.setHeader('Content-Type', contentType);
     res.setHeader('Cache-Control', 'public, max-age=604800, immutable');
     res.send(buffer);
@@ -470,8 +568,8 @@ app.get('/api/proxy-image', async (req, res) => {
 
 // Serve built frontend in production
 const candidateDistDirs = [
-  path.resolve(__dirname, '../../dist'),
-  path.resolve(__dirname, '../dist'),
+  path.resolve(currentDir, '../../dist'),
+  path.resolve(currentDir, '../dist'),
   path.resolve(process.cwd(), 'dist'),
 ];
 const distDir = candidateDistDirs.find((d) => fs.existsSync(path.join(d, 'index.html')));
