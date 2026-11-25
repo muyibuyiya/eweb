@@ -214,6 +214,39 @@ export async function fetchTagTranslationDb(
   return requestJson<TagDbResponse>(`/api/tag-db${qs}`, settings);
 }
 
+export interface PreloadStatusResponse {
+  supported: boolean;
+  gid?: string;
+  loaded: number;
+  total: number;
+  running: boolean;
+  message?: string;
+}
+
+export async function startBackgroundPreload(
+  gid: string,
+  startPage: number,
+  count: number,
+  pages: Array<{ page: number; pageToken: string }>,
+  settings: AppSettings
+): Promise<PreloadStatusResponse> {
+  return requestJson<PreloadStatusResponse>('/api/preload-gallery', settings, {
+    method: 'POST',
+    body: { gid, startPage, count, pages },
+  });
+}
+
+export async function fetchPreloadStatus(
+  gid: string,
+  settings: AppSettings
+): Promise<PreloadStatusResponse | null> {
+  try {
+    return await requestJson<PreloadStatusResponse>(`/api/preload-status/${gid}`, settings);
+  } catch {
+    return null;
+  }
+}
+
 export async function fetchHealth(settings?: AppSettings): Promise<HealthInfo | null> {
   try {
     const res = await fetch(apiUrl('/api/health', settings));

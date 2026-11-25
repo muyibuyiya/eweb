@@ -476,6 +476,17 @@ export default {
         return jsonResponse(request, parsed);
       }
 
+      if (pathname === '/api/preload-gallery' && request.method === 'POST') {
+        return jsonResponse(request, {
+          supported: false,
+          message: 'Cloudflare Workers 无持久后台内存，服务端后台预载需使用本机 Node 或 AWS 后端。',
+        });
+      }
+
+      if (pathname.startsWith('/api/preload-status/')) {
+        return jsonResponse(request, { supported: false, loaded: 0, total: 0, running: false });
+      }
+
       if (pathname === '/api/tag-db') {
         const sources = [
           'https://cdn.jsdelivr.net/gh/EhTagTranslation/DatabaseReleases@master/db.text.json',

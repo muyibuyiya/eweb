@@ -9,6 +9,7 @@ import {
   RefreshCw,
   RotateCcw,
   Rows3,
+  Zap,
 } from 'lucide-react';
 import type {
   AppSettings,
@@ -16,7 +17,14 @@ import type {
   ReaderImageResponse,
   ReadingMode,
 } from '../../shared/types';
-import { buildImageUrl, fetchGalleryDetail, fetchReaderImage } from '../lib/api';
+import {
+  buildImageUrl,
+  fetchGalleryDetail,
+  fetchPreloadStatus,
+  fetchReaderImage,
+  startBackgroundPreload,
+  type PreloadStatusResponse,
+} from '../lib/api';
 import { unscrambleJmImageUrl } from '../lib/jmUnscramble';
 
 interface ReaderViewProps {
@@ -74,6 +82,67 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
   const [actionSheetPage, setActionSheetPage] = useState<number | null>(null);
   const [saving, setSaving] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
+  const [bgPreload, setBgPreload] = useState<PreloadStatusResponse | null>(null);
+
+  const isEhSource = detail.source === 'e-hentai' || detail.source === 'exhentai';
+
+  const triggerBackgroundPreload = useCallback(
+    async (fromPage: number, silent = false) => {
+      if (!isEhSource || settings.demoMode) return;
+      const pagesList = Object.entries(tokenMapRef.current)
+        .map(([p, token]) => ({ page: Number(p), pageToken: token }))
+        .sort((a, b) => a.page - b.page);
+      if (pagesList.length === 0) return;
+
+      try {
+        const status = await startBackgroundPreload(
+          detail.gid,
+          fromPage,
+          settings.preloadCount,
+          pagesList,
+          settings
+        );
+        setBgPreload(status);
+        if (!silent) {
+          if (status.supported) {
+            showToast(`已启动服务端后台预载（后续 ${status.total} 页），切到其他应用也会继续加载`);
+          } else if (status.message) {
+            showToast(status.message);
+          }
+        }
+      } catch {
+        if (!silent) showToast('启动后台预载失败');
+      }
+    },
+    [detail.gid, isEhSource, settings]
+  );
+
+  // Auto-start server-side background preloader when opening E-Hentai reader
+  useEffect(() => {
+    if (!isEhSource || !settings.autoBgPreload || settings.demoMode) return;
+    triggerBackgroundPreload(initialPage, true);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [detail.gid, isEhSource, settings.autoBgPreload]);
+
+  // Poll preload status while running (and immediately refresh when returning from another app)
+  useEffect(() => {
+    if (!bgPreload?.supported || !bgPreload.running) return;
+    let active = true;
+    const poll = async () => {
+      const next = await fetchPreloadStatus(detail.gid, settings);
+      if (active && next) setBgPreload(next);
+    };
+    const timer = window.setInterval(poll, 2500);
+    const onVisible = () => {
+      if (document.visibilityState === 'visible') poll();
+    };
+    document.addEventListener('visibilitychange', onVisible);
+    return () => {
+      active = false;
+      window.clearInterval(timer);
+      document.removeEventListener('visibilitychange', onVisible);
+    };
+  }, [bgPreload?.running, bgPreload?.supported, detail.gid, settings]);
 
   const showToast = useCallback((msg: string) => {
     setToast(msg);
@@ -94,12 +163,14 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
       clearLongPress();
       longPressTriggeredRef.current = false;
       touchStartRef.current = { x: clientX, y: clientY };
+      // If user disabled built-in long-press (0ms), let native Safari long-press handle it
+      if (!settings.longPressMs || settings.longPressMs <= 0) return;
       longPressTimerRef.current = window.setTimeout(() => {
         longPressTriggeredRef.current = true;
         setActionSheetPage(pageNum);
-      }, 520);
+      }, settings.longPressMs);
     },
-    [clearLongPress]
+    [clearLongPress, settings.longPressMs]
   );
 
   const handleTouchMoveCancelLongPress = useCallback(
@@ -459,18 +530,35 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
           </div>
         </div>
 
-        <button
-          type="button"
-          onClick={cycleMode}
-          className="inline-flex shrink-0 items-center gap-1 rounded-full bg-white/12 px-3 py-1.5 text-[12px] font-medium active:scale-95"
-        >
-          {mode === 'vertical' ? (
-            <Rows3 className="h-3.5 w-3.5" />
-          ) : (
-            <Columns2 className="h-3.5 w-3.5" />
+        <div className="flex shrink-0 items-center gap-1.5">
+          {isEhSource && !settings.demoMode && (
+            <button
+              type="button"
+              onClick={() => triggerBackgroundPreload(currentPage, false)}
+              className="inline-flex items-center gap-1 rounded-full bg-indigo-500/30 px-2.5 py-1.5 text-[11px] font-semibold text-indigo-200 active:scale-95"
+              title="在后端继续预载后续页面（切到其他应用也会继续加载）"
+            >
+              <Zap className={`h-3.5 w-3.5 ${bgPreload?.running ? 'animate-pulse text-amber-300' : ''}`} />
+              {bgPreload?.supported && bgPreload.total > 0
+                ? bgPreload.running
+                  ? `${bgPreload.loaded}/${bgPreload.total}`
+                  : `已预载 ${bgPreload.loaded}`
+                : '后台预载'}
+            </button>
           )}
-          {MODE_LABELS[mode]}
-        </button>
+          <button
+            type="button"
+            onClick={cycleMode}
+            className="inline-flex shrink-0 items-center gap-1 rounded-full bg-white/12 px-3 py-1.5 text-[12px] font-medium active:scale-95"
+          >
+            {mode === 'vertical' ? (
+              <Rows3 className="h-3.5 w-3.5" />
+            ) : (
+              <Columns2 className="h-3.5 w-3.5" />
+            )}
+            {MODE_LABELS[mode]}
+          </button>
+        </div>
       </header>
 
       {/* Reader Viewport */}

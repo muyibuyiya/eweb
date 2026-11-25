@@ -20,7 +20,9 @@ export const DEFAULT_SETTINGS: AppSettings = {
   theme: 'system',
   readingMode: 'vertical',
   viewLayout: 'grid',
-  preloadCount: 5,
+  preloadCount: 15,
+  longPressMs: 1000,
+  autoBgPreload: true,
 };
 
 function readJson<T>(key: string, fallback: T): T {

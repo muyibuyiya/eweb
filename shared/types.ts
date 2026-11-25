@@ -164,6 +164,10 @@ export interface AppSettings {
   readingMode: ReadingMode;
   viewLayout: ViewLayout;
   preloadCount: number;
+  /** Custom long-press duration in ms (0 = disabled, use native Safari long-press only) */
+  longPressMs: number;
+  /** Automatically trigger server-side background preloading when opening E-Hentai reader */
+  autoBgPreload: boolean;
 }
 
 export interface ReadingHistoryItem {

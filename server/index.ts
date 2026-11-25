@@ -72,9 +72,20 @@ app.use(
 app.use(express.json({ limit: '256kb' }));
 
 // In-memory LRU caches for fast repeat browsing & reading
-const apiCache = new LruCache<unknown>(16 * 1024 * 1024, 300);
-const imageCache = new LruCache<{ buffer: Buffer; contentType: string }>(120 * 1024 * 1024, 400);
+const apiCache = new LruCache<unknown>(24 * 1024 * 1024, 500);
+const imageCache = new LruCache<{ buffer: Buffer; contentType: string }>(256 * 1024 * 1024, 600);
 const inFlightImages = new Map<string, Promise<{ buffer: Buffer; contentType: string }>>();
+
+interface PreloadJob {
+  gid: string;
+  total: number;
+  loaded: number;
+  failed: number;
+  running: boolean;
+  updatedAt: number;
+  cancelled: boolean;
+}
+const preloadJobs = new Map<string, PreloadJob>();
 
 // In-memory session store so <img> proxy requests don't need raw cookies in URLs
 interface SessionConfig {
@@ -526,6 +537,140 @@ app.get('/api/tag-db', async (req, res) => {
   } catch (err) {
     handleError(res, err);
   }
+});
+
+// Background E-Hentai gallery preloader (keeps running even if iPhone Safari is suspended/locked)
+app.post('/api/preload-gallery', (req, res) => {
+  const { gid, startPage, count, pages } = req.body || {};
+  if (!gid || !Array.isArray(pages) || pages.length === 0) {
+    res.status(400).json({ error: '缺少预载参数' });
+    return;
+  }
+
+  const ctx = getRequestContext(req);
+  if (ctx.site !== 'e-hentai' && ctx.site !== 'exhentai') {
+    res.json({ supported: false, message: '仅 E-Hentai / ExHentai 需要服务端预载' });
+    return;
+  }
+
+  const start = Math.max(1, parseInt(String(startPage || 1), 10) || 1);
+  const limit = Math.min(30, Math.max(1, parseInt(String(count || 15), 10) || 15));
+
+  // Cancel any older preload job for the same gallery
+  const prevJob = preloadJobs.get(String(gid));
+  if (prevJob) prevJob.cancelled = true;
+
+  // Build ordered page token map from client previews
+  const tokenMap = new Map<number, string>();
+  for (const item of pages as Array<{ page?: number; pageToken?: string }>) {
+    if (typeof item?.page === 'number' && typeof item?.pageToken === 'string') {
+      tokenMap.set(item.page, item.pageToken);
+    }
+  }
+
+  const targetPages: number[] = [];
+  for (let p = start; p < start + limit; p++) {
+    if (tokenMap.has(p)) targetPages.push(p);
+  }
+  if (targetPages.length === 0) {
+    res.json({ supported: true, gid: String(gid), loaded: 0, total: 0, running: false });
+    return;
+  }
+
+  const job: PreloadJob = {
+    gid: String(gid),
+    total: targetPages.length,
+    loaded: 0,
+    failed: 0,
+    running: true,
+    updatedAt: Date.now(),
+    cancelled: false,
+  };
+  preloadJobs.set(String(gid), job);
+
+  // Run detached background preloader with concurrency = 2
+  (async () => {
+    const base = getSiteBaseUrl(ctx.site);
+    let cursor = 0;
+
+    const worker = async () => {
+      while (!job.cancelled) {
+        const idx = cursor++;
+        if (idx >= targetPages.length) break;
+        const pageNum = targetPages[idx];
+        const pageToken = tokenMap.get(pageNum);
+        if (!pageToken) continue;
+
+        try {
+          const pageCacheKey = `page|${ctx.site}|${gid}|${pageToken}|${pageNum}`;
+          let pageInfo = apiCache.get(pageCacheKey) as
+            | { imageUrl?: string; nextPageToken?: string }
+            | undefined;
+
+          if (!pageInfo) {
+            const url = new URL(`/s/${pageToken}/${gid}-${pageNum}`, base);
+            const html = await ehFetchHtml(url.toString(), ctx);
+            const parsed = parseReaderPageHtml(html, String(gid), pageToken, pageNum);
+            if (parsed.imageUrl) {
+              apiCache.set(pageCacheKey, parsed, 15 * 60_000, 4096);
+              pageInfo = parsed;
+            }
+          }
+
+          if (pageInfo?.imageUrl && !imageCache.get(pageInfo.imageUrl)) {
+            let pending = inFlightImages.get(pageInfo.imageUrl);
+            if (!pending) {
+              pending = ehFetchBinary(pageInfo.imageUrl, ctx).finally(() => {
+                inFlightImages.delete(pageInfo!.imageUrl!);
+              });
+              inFlightImages.set(pageInfo.imageUrl, pending);
+            }
+            const { buffer, contentType } = await pending;
+            imageCache.set(
+              pageInfo.imageUrl,
+              { buffer, contentType },
+              30 * 60_000,
+              buffer.byteLength
+            );
+          }
+
+          job.loaded++;
+        } catch {
+          job.failed++;
+        } finally {
+          job.updatedAt = Date.now();
+        }
+      }
+    };
+
+    await Promise.all([worker(), worker()]);
+    job.running = false;
+    job.updatedAt = Date.now();
+  })();
+
+  res.json({
+    supported: true,
+    gid: job.gid,
+    loaded: job.loaded,
+    total: job.total,
+    running: job.running,
+  });
+});
+
+app.get('/api/preload-status/:gid', (req, res) => {
+  const job = preloadJobs.get(req.params.gid);
+  if (!job) {
+    res.json({ supported: true, gid: req.params.gid, loaded: 0, total: 0, running: false });
+    return;
+  }
+  res.json({
+    supported: true,
+    gid: job.gid,
+    loaded: job.loaded,
+    total: job.total,
+    failed: job.failed,
+    running: job.running,
+  });
 });
 
 // Image proxy with host allowlist + LRU cache & request deduplication

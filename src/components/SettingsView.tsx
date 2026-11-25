@@ -452,29 +452,88 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
           </div>
         </div>
 
-        <div className="flex items-center justify-between p-4">
-          <div>
-            <div className="text-[14px] font-bold">图片预加载页数</div>
-            <div className="text-[12px]" style={{ color: 'var(--text-secondary)' }}>
-              翻页时提前缓存后续页面
+        <div className="p-4">
+          <div className="flex items-center justify-between">
+            <div>
+              <div className="text-[14px] font-bold">图片预加载页数</div>
+              <div className="text-[12px]" style={{ color: 'var(--text-secondary)' }}>
+                翻页与后台预载时提前缓存的后续页数（建议 10~15 页）
+              </div>
             </div>
           </div>
-          <div className="flex items-center gap-2">
-            {[1, 2, 3, 5].map((n) => (
+          <div className="mt-3 grid grid-cols-5 gap-2">
+            {[3, 5, 10, 15, 25].map((n) => (
               <button
                 key={n}
                 type="button"
                 onClick={() => onUpdate({ preloadCount: n })}
-                className="h-8 w-8 rounded-lg text-[13px] font-semibold"
+                className="rounded-xl py-2 text-[13px] font-semibold"
                 style={{
                   background: settings.preloadCount === n ? 'var(--accent)' : 'var(--bg-chip)',
                   color: settings.preloadCount === n ? '#fff' : 'var(--text-primary)',
                 }}
               >
-                {n}
+                {n}页
               </button>
             ))}
           </div>
+        </div>
+
+        <div className="p-4">
+          <div className="text-[14px] font-bold">长按保存菜单触发时间</div>
+          <div className="mt-0.5 text-[12px]" style={{ color: 'var(--text-secondary)' }}>
+            调长可避免与 Safari 原生长按冲突；选「关闭」则仅使用 Safari 原生长按保存
+          </div>
+          <div className="mt-3 grid grid-cols-4 gap-2">
+            {(
+              [
+                { ms: 0, label: '关闭' },
+                { ms: 600, label: '0.6 秒' },
+                { ms: 1000, label: '1.0 秒' },
+                { ms: 1500, label: '1.5 秒' },
+              ] as const
+            ).map((opt) => {
+              const active = settings.longPressMs === opt.ms;
+              return (
+                <button
+                  key={opt.ms}
+                  type="button"
+                  onClick={() => onUpdate({ longPressMs: opt.ms })}
+                  className="rounded-xl py-2 text-[12px] font-semibold"
+                  style={{
+                    background: active ? 'var(--accent)' : 'var(--bg-chip)',
+                    color: active ? '#fff' : 'var(--text-primary)',
+                  }}
+                >
+                  {opt.label}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+
+        <div className="flex items-center justify-between gap-3 p-4">
+          <div>
+            <div className="text-[14px] font-bold">阅读时自动服务端后台预载</div>
+            <div className="text-[12px]" style={{ color: 'var(--text-secondary)' }}>
+              针对 E-Hentai：切到其他 App 或锁屏时，本机/AWS 后端仍会继续缓存后续图片
+            </div>
+          </div>
+          <button
+            type="button"
+            role="switch"
+            aria-checked={settings.autoBgPreload}
+            onClick={() => onUpdate({ autoBgPreload: !settings.autoBgPreload })}
+            className={`relative h-7 w-12 shrink-0 rounded-full transition-colors ${
+              settings.autoBgPreload ? 'bg-indigo-500' : 'bg-neutral-400/40'
+            }`}
+          >
+            <span
+              className={`absolute top-0.5 left-0.5 h-6 w-6 rounded-full bg-white shadow transition-transform ${
+                settings.autoBgPreload ? 'translate-x-5' : 'translate-x-0'
+              }`}
+            />
+          </button>
         </div>
       </section>
 
